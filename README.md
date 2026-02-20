@@ -88,6 +88,11 @@ python examples/live_halt_demo.py
 
 ## Architecture
 
+![Architecture](https://raw.githubusercontent.com/prohormonePro/sovereign-seal/main/assets/architecture.png)
+
+<details>
+<summary>Mermaid source (renders on GitHub)</summary>
+
 ```mermaid
 graph LR
     A[INIT] --> B[APPENDING]
@@ -102,6 +107,8 @@ graph LR
 
     style F fill:#900,stroke:#333,stroke-width:2px,color:#fff
 ```
+
+</details>
 
 ---
 
