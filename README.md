@@ -5,14 +5,9 @@
 ![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen.svg)
 ![Tests: 15/15](https://img.shields.io/badge/tests-15%2F15-brightgreen.svg)
 
-**AI agents drift. Logs don't stop them.**
+`sovereign-seal` provides a local hash-chain ledger, witness-tip comparison and caller-supplied output checks. A caller that invokes the gate receives an exception when one of those checks fails. The package does not intercept arbitrary agent actions or prove that a statement, external effect or delivery is correct.
 
-`sovereign-seal` is a deterministic governance layer that **halts** an agent unless it can prove:
-1. its history is intact,
-2. its witnesses agree, and
-3. its output passes your rules.
-
-Most agent frameworks focus on *coordination*: prompting, retrying, and hoping the LLM behaves. `sovereign-seal` shifts the paradigm to *specification*. It moves the invariant from a prompt to a cryptographic invariant.
+Hash continuity checks retained bytes. Witness agreement checks supplied tip files. Neither establishes an independently authenticated history if a principal can rewrite all copies. See [Security](SECURITY.md) for the trusted boundary.
 
 ```python
 from sovereign_seal import SovereignSeal
@@ -76,13 +71,13 @@ python examples/live_halt_demo.py
 
 ---
 
-## The Three Invariants
+## The Three Configured Checks
 
-- **Chain integrity** — Every action is SHA-256 hashed into an append-only ledger. Each entry chains to the previous. Tamper with one line and every line after it breaks. Detected. Halted.
+- **Chain integrity** — Every action is SHA-256 hashed into an append-only ledger. Each entry chains to the previous. Changing an entry without coherently recomputing the chain is detected by verification. An authorized filesystem writer can rewrite a whole chain; separate trusted evidence is needed to detect that case.
 
-- **Witness consensus** — Before acting, the system checks that all replica nodes agree on the current tip. Stale pointers, network partitions, silent corruption — all caught before damage. Halted.
+- **Witness consensus** — Before acting, the system checks that all replica nodes agree on the current tip. A mismatching or missing supplied tip raises an error. This is not a distributed consensus protocol or a proof that all failures are caught before damage.
 
-- **Voice governance** — Output passes through your rules before release. PII exposure, banned phrases, missing evidence — define checks as simple Python functions. Any failure = halted.
+- **Voice governance** — Output passes through your rules before release. Caller-supplied functions can reject selected patterns. A passing vocabulary check does not establish privacy or supporting evidence.
 
 ---
 
@@ -114,44 +109,48 @@ graph LR
 
 ## Drop-In Wrapper
 
-The fastest way to governance-wrap any agent:
+A single-writer syntactic demonstration. The checks below do not validate citations, detect all personal information, or establish factual accuracy. `prepare_response` records preparation only; it never sends a response. A real connector must separately reconcile its provider outcome before recording delivery.
 
 ```python
 from sovereign_seal import SovereignSeal, SealError
 
 seal = SovereignSeal("./ledger")
 replica = "./replica"
+# Fresh demonstration directories only. Do not overwrite real witness evidence.
+seal.export_tip(replica)
 
-def no_pii(text):
+def no_ssn_marker(text):
     return "ssn:" not in text.lower()
 
-def must_cite(text):
+def has_evidence_word(text):
     return any(w in text.lower() for w in ["study", "data", "tested", "verified"])
 
-def governed_respond(agent_output: str) -> str:
-    """Returns the output only if governance passes. Otherwise raises."""
+def prepare_response(agent_output: str) -> str:
+    """Returns text after these configured checks; no delivery occurs here."""
     seal.halt_or_proceed(
         witnesses=[replica],
-        voice_checks=[no_pii, must_cite],
+        voice_checks=[no_ssn_marker, has_evidence_word],
         voice_input=agent_output,
     )
-    seal.append(action="response emitted", metadata={"len": len(agent_output)})
+    seal.append(action="response prepared", metadata={"len": len(agent_output)})
     seal.export_tip(replica)
     return agent_output
 
 # Usage:
 try:
-    safe = governed_respond(my_agent.run(query))
+    safe = prepare_response(my_agent.run(query))
     send_to_user(safe)
 except SealError as e:
     log_halt(e)  # agent was stopped
 ```
 
-Copy, paste, run.
+The usage block contains application placeholders. An exception or timeout from `send_to_user` can leave delivery unknown; do not retry a conflicting send merely because this local ledger has no acceptance record.
 
 ---
 
 ## Integration
+
+The following sketches are not tested framework integrations. Variables, connectors and application checks must be supplied by the caller. A gate after a mutating tool call cannot prevent an effect that already happened. None of these snippets establishes remote delivery, idempotency or rollback.
 
 ### With LangChain
 
@@ -168,17 +167,17 @@ seal.append(action="chain.invoke completed", metadata={"input": query})
 seal.export_tip("./replica")
 ```
 
-### With OpenAI Assistants
+### With an application response
 
 ```python
 seal = SovereignSeal("./assistant_ledger")
 
 # Before sending response to user:
 seal.halt_or_proceed(
-    voice_checks=[no_pii, no_hallucinations, must_cite_sources],
+    voice_checks=application_checks,  # Must be implemented for the actual application
     voice_input=assistant_response,
 )
-seal.append(action="response sent", metadata={"thread": thread_id})
+seal.append(action="response prepared", metadata={"thread": thread_id})
 ```
 
 ### With CrewAI / AutoGen / Any Multi-Agent Framework
@@ -197,18 +196,9 @@ def governed_step(agent, task):
 
 ---
 
-## Why Not X?
+## Scope of comparison
 
-| Approach | What it does | What it doesn't do |
-|----------|-------------|-------------------|
-| **Prompt-based safety** | Asks the model to behave | Doesn't enforce. Model can ignore. |
-| **Logging** | Records what happened | Doesn't prevent what happens next. |
-| **Guardrails / NeMo** | Pattern-matches output | No chain integrity. No witness consensus. No cryptographic proof. |
-| **sovereign-seal** | Halts unless proven safe | **That's the difference.** |
-
-Logging tells you what went wrong *after*. `sovereign-seal` prevents it *before*.
-
----
+This package demonstrates local ledger checks. It has not been benchmarked against workflow engines or safety frameworks, and it does not establish that they lack equivalent safeguards. Choose controls from the actual authority, storage and target-effect contract.
 
 ## Threat Model
 
@@ -221,7 +211,7 @@ Logging tells you what went wrong *after*. `sovereign-seal` prevents it *before*
 | Banned output content | `VoiceDrift` naming the failed check | **Halt** |
 | Missing evidence markers | `VoiceDrift` naming the failed check | **Halt** |
 
-Every failure mode is the same: **halt**. The system does not degrade gracefully. It stops and tells you why.
+The listed checks raise exceptions. Application code must handle those exceptions and must separately account for external effects. Unlisted failure modes are not covered by this table.
 
 ---
 
@@ -286,9 +276,9 @@ The system raises (does not proceed) when any invariant is violated. There is no
 
 | Mode | Cause | Recovery |
 |------|-------|----------|
-| Corrupted entry | Bit flip, disk error, malicious edit | Restore from witness replica |
-| Chain break | Reordered/deleted entry | Restore from witness replica |
-| Witness drift | Network partition, stale pointer | Re-publish tip, re-verify |
+| Corrupted entry | Bit flip, disk error, malicious edit | Restore only from an independently trusted full backup; exported tip alone is not a backup |
+| Chain break | Reordered/deleted entry | Restore only from an independently trusted full backup; exported tip alone is not a backup |
+| Witness drift | Network partition, stale pointer | Reconcile the disagreement before selecting an authoritative tip; do not overwrite contrary evidence |
 | Voice drift | Agent hallucination, policy violation | Regenerate output, re-gate |
 
 ---
